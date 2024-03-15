@@ -1,4 +1,4 @@
-name: pyknotid 
+name: pyknotid-dev 
 channels:
   - conda-forge
 dependencies:

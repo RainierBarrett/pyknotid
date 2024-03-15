@@ -15,5 +15,6 @@ dependencies:
   - appdirs
   - requests
   - tqdm
-  - pip
+  - pip:
       - git+https://github.com/hagberg/planarity.git@master
+      - git+https://github.com/chrisjonesBSU/pyknotid.git@master

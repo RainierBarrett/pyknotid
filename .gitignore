@@ -2,3 +2,5 @@
 *.so
 *.c
 *.db
+build/*
+pyknotid.egg-info/*

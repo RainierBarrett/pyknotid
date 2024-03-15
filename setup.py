@@ -70,14 +70,6 @@ else:
 if version is None:
     raise Exception('Error: version could not be loaded from {}'.format(pyknotid_init_filen))
 
-if 'READTHEDOCS' in environ and environ['READTHEDOCS'] == 'True':
-    print('Installing for doc only')
-    install_requires=['numpy', 'peewee', 'vispy', 'sympy']
-else:
-    install_requires=['numpy', 'networkx', 'planarity',
-                      'peewee', 'vispy', 'sympy', 'appdirs',
-                      'requests', 'tqdm'],
-
 long_description = '''
 Pyknotid
 ========
@@ -116,7 +108,6 @@ setup(
     long_description=long_description,
     author='Alexander Taylor',
     author_email='alexander.taylor@bristol.ac.uk',
-    install_requires=install_requires,
     ext_modules=ext_modules,
     include_dirs=include_dirs,
     packages=find_packages(),

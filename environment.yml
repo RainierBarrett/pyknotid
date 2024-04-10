@@ -2,13 +2,14 @@ name: pyknotid
 channels:
   - conda-forge
 dependencies:
+  - python = 3.11
   - cython
+  - numba
   - peewee
   - sympy
   - numpy
   - pip
   - planarity
-  - python = 3.11
   - matplotlib
   - networkx
   - vispy

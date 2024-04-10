@@ -3,11 +3,48 @@ Python version of cython functions for space curve analysis.
 '''
 
 import numpy as n
+from numba import njit, jit
 
 csqrt = n.sqrt
 floor = n.floor
 
 
+@njit
+def cross_product(px, py, qx, qy):
+    '''Simple cython cross product for 2D vectors.'''
+    return px * qy - py * qx
+
+@njit
+def mag_difference(a, b):
+    '''The magnitude of the vector joining a and b'''
+    return csqrt((b[0] - a[0])**2 + (b[1] - a[1])**2)
+
+@njit
+def sign(a):
+    return (1. if a > 0. else (-1. if a < 0. else 0.))
+                                      
+@njit
+def do_vectors_intersect(px, py, dpx, dpy,
+                                qx, qy, dqx, dqy):
+    """Takes four vectors p, dp and q, dq, then tests whether they cross in
+    the dp/dq region. Returns this boolean, and the (fractional) point where
+    the crossing actually occurs.
+    """
+    if abs(cross_product(dpx, dpy, dqx, dqy)) < 0.00001:
+        return (0, 0., 0.)
+
+    t = cross_product(qx - px, qy - py, dqx, dqy) / cross_product(dpx, dpy,
+                                                                  dqx, dqy)
+    if t < 1.0 and t > 0.0:
+        u = cross_product(qx - px, qy - py, dpx, dpy) / cross_product(dpx, dpy,
+                                                                      dqx, dqy)
+        if u < 1.0 and u > 0.0:
+            return (1, t, u)
+    return (0, -1., -1.)
+        
+
+@jit('(float64[:,:])(float64[:], float64[:], float64[:,:], float64[:], int64, int64, int64, int64)',
+     nopython=True)
 def find_crossings(v, dv,
                    points,
                    segment_lengths,
@@ -42,7 +79,7 @@ def find_crossings(v, dv,
         of every step.
     '''
 
-    crossings = []
+    crossings = n.zeros((len(points), 4))
     vx = v[0]
     vy = v[1]
     vz = v[2]
@@ -80,16 +117,16 @@ def find_crossings(v, dv,
                 crossing_direction = sign(cross_product(
                     dvx, dvy, jump_x, jump_y))
 
-                crossings.append([current_index + intersect_i,
-                                  (comparison_index + intersect_j +
-                                   i),
-                                  crossing_sign,
-                                  crossing_sign * crossing_direction])
-                crossings.append([(comparison_index + intersect_j +
-                                   i),
-                                  current_index + intersect_i,
-                                  -1. * crossing_sign,
-                                  crossing_sign * crossing_direction])
+                crossings[i] += n.array(
+                    [current_index + intersect_i,
+                     (comparison_index + intersect_j + i),
+                     crossing_sign,
+                     crossing_sign * crossing_direction])
+                crossings[i] += n.array(
+                    [(comparison_index + intersect_j + i),
+                     current_index + intersect_i,
+                     -1. * crossing_sign,
+                     crossing_sign * crossing_direction])
             i += 1
 
         elif jump_mode == 3:
@@ -116,36 +153,46 @@ def find_crossings(v, dv,
             # without doing vector arithmetic at every step
                                   
     return crossings
-                                      
-
-def do_vectors_intersect(px, py, dpx, dpy,
-                                qx, qy, dqx, dqy):
-    """Takes four vectors p, dp and q, dq, then tests whether they cross in
-    the dp/dq region. Returns this boolean, and the (fractional) point where
-    the crossing actually occurs.
-    """
-    if abs(cross_product(dpx, dpy, dqx, dqy)) < 0.00001:
-        return (0, 0., 0.)
-
-    t = cross_product(qx - px, qy - py, dqx, dqy) / cross_product(dpx, dpy,
-                                                                  dqx, dqy)
-    if t < 1.0 and t > 0.0:
-        u = cross_product(qx - px, qy - py, dpx, dpy) / cross_product(dpx, dpy,
-                                                                      dqx, dqy)
-        if u < 1.0 and u > 0.0:
-            return (1, t, u)
-    return (0, -1., -1.)
-        
-
-def cross_product(px, py, qx, qy):
-    '''Simple cython cross product for 2D vectors.'''
-    return px * qy - py * qx
 
 
-def sign(a):
-    return (1. if a > 0. else (-1. if a < 0. else 0.))
+@jit('Tuple((float64[:,:], float64[:,:]))(float64[:,:], float64[:], int64, int64, float64[:], int64)',
+     nopython=True)
+def raw_cross_loop(lines, segment_lengths, max_segment_length, jump_mode, cumulative_lengths, include_closures):
+    for line_index, line in enumerate(lines):
+        for other_index, other_line in enumerate(lines[line_index+1:]):
+            other_index += line_index + 1
+            #by this point these are just two array-likes
+            points = line
+            comparison_points = other_line
+            if include_closures:
+                comparison_points = n.vstack((comparison_points,
+                                              comparison_points[:1]))
+            other_seg_lengths = segment_lengths[other_index]
+            #other_seg_lengths is already corrected to include
+            #closures if necessary
+            first_line_range = range(len(points))
+            if not include_closures:
+                first_line_range = first_line_range[:-1]
+            for i in first_line_range:
+                v0 = points[i]
+                dv = points[(i + 1) % len(points)] - v0
+                
+                vnum = i
+                compnum = 0  # start at beginning of other line
+                
+                new_crossings = find_crossings(
+                    v0, dv, comparison_points, other_seg_lengths,
+                    vnum, compnum,
+                    max_segment_length,
+                    jump_mode)
 
+                if not len(new_crossings):
+                        continue
+                first_crossings = n.array(new_crossings[::2])
+                first_crossings[:, 0] += cumulative_lengths[line_index]
+                first_crossings[:, 1] += cumulative_lengths[other_index]
+                sec_crossings = n.array(new_crossings[1::2])
+                sec_crossings[:, 0] += cumulative_lengths[other_index]
+                sec_crossings[:, 1] += cumulative_lengths[line_index]
 
-def mag_difference(a, b):
-    '''The magnitude of the vector joining a and b'''
-    return csqrt((b[0] - a[0])**2 + (b[1] - a[1])**2)
+    return first_crossings, sec_crossings

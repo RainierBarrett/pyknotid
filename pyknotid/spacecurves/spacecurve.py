@@ -534,12 +534,13 @@ class SpaceCurve(object):
             vnum = i
             compnum = i+2
 
-            crossings.extend(helpers_module.find_crossings(
+            these_crossings = helpers_module.find_crossings(
                 v0, dv, s, segment_lengths[compnum:],
                 vnum, compnum,
                 max_segment_length,
                 jump_mode
-                ))
+                )
+            crossings.extend(these_crossings[n.nonzero(these_crossings)])
 
         if include_closure:
             closure_segment_length = segment_lengths[-1]
@@ -550,11 +551,12 @@ class SpaceCurve(object):
             s = points[1:-1]
             vnum = len(points) - 1
             compnum = 1
-            crossings.extend(helpers_module.find_crossings(
+            these_crossings = helpers_module.find_crossings(
                 v0, dv, s, segment_lengths[compnum:],
                 vnum, compnum,
                 max_segment_length,
-                jump_mode))
+                jump_mode)
+            crossings.extend(these_crossings[n.nonzero(these_crossings)])
 
         self._vprint('\n{} crossings found\n'.format(len(crossings) / 2))
         crossings.sort(key=lambda s: s[0])

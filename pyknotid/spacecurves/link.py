@@ -17,6 +17,7 @@ API documentation
 '''
 
 import numpy as n
+from numba import jit, njit
 
 try:
     from pyknotid.spacecurves import chelpers
@@ -46,7 +47,7 @@ class Link(object):
         to True.
     '''
 
-    def __init__(self, lines, verbose=True):
+    def __init__(self, lines, verbose=False):
         self._lines = []
         self.verbose = verbose
 
@@ -97,7 +98,6 @@ class Link(object):
             link.translate(n.array([0.00123, 0.00231, 0.00321]))
             link.rotate()
         return link
-
     def raw_crossings(self, mode='use_max_jump', only_with_other_lines=True,
                       include_closures=True,
                       recalculate=False,
@@ -195,56 +195,18 @@ class Link(object):
             max_segment_length = n.max(n.hstack([
                 lengths[:-1] for lengths in segment_lengths]))
 
-        for line_index, line in enumerate(lines):
-            for other_index, other_line in enumerate(lines[line_index+1:]):
-                self._vprint(
-                    '\rComparing line {} with {}'.format(line_index,
-                                                         other_index))
+        # TODO: this is where numba should come in
 
-                other_index += line_index + 1
-
-                points = line.points
-                comparison_points = other_line.points
-                if include_closures:
-                    comparison_points = n.vstack((comparison_points,
-                                                  comparison_points[:1]))
-
-                other_seg_lengths = segment_lengths[other_index]
-                # other_seg_lengths is already corrected to include
-                # closures if necessary
-
-                first_line_range = range(len(points))
-                if not include_closures:
-                    first_line_range = first_line_range[:-1]
-
-                for i in first_line_range:
-                    if i % 1000 == 0:
-                        self._vprint(
-                            '\ri = {} / {}'.format(
-                                i, len(first_line_range)), False)
-                    v0 = points[i]
-                    dv = points[(i + 1) % len(points)] - v0
-
-                    vnum = i
-                    compnum = 0  # start at beginning of other line
-
-                    new_crossings = helpers_module.find_crossings(
-                        v0, dv, comparison_points, other_seg_lengths,
-                        vnum, compnum,
-                        max_segment_length,
-                        jump_mode)
-
-                    if not len(new_crossings):
-                        continue
-                    first_crossings = n.array(new_crossings[::2])
-                    first_crossings[:, 0] += cumulative_lengths[line_index]
-                    first_crossings[:, 1] += cumulative_lengths[other_index]
-                    sec_crossings = n.array(new_crossings[1::2])
-                    sec_crossings[:, 0] += cumulative_lengths[other_index]
-                    sec_crossings[:, 1] += cumulative_lengths[line_index]
-
-                    crossings[line_index].extend(first_crossings.tolist())
-                    crossings[other_index].extend(sec_crossings.tolist())
+        points = n.array([line.points for line in lines])
+        first_crossings, sec_crossings = helpers.raw_cross_loop(points,
+                                                                segment_lengths,
+                                                                max_segment_length,
+                                                                jump_mode=jump_mode,
+                                                                cumulative_lengths=cumulative_lengths,
+                                                                include_closures=include_closures)
+        crossings[line_index].extend(first_crossings.tolist())
+        crossings[other_index].extend(sec_crossings.tolist())
+        
 
         self._vprint('\n{} crossings found\n'.format(
             [len(cs) / 2 for cs in crossings]))

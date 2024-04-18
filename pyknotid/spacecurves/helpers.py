@@ -3,6 +3,7 @@ Python version of cython functions for space curve analysis.
 '''
 
 import numpy as n
+from numba import cuda
 
 csqrt = n.sqrt
 floor = n.floor
@@ -114,10 +115,10 @@ def find_crossings(v, dv,
             already_jumped = 1
             # This keeps jumping until we might be close enough to intersect,
             # without doing vector arithmetic at every step
-                                  
+
     return crossings
                                       
-
+@cuda.jit
 def do_vectors_intersect(px, py, dpx, dpy,
                                 qx, qy, dqx, dqy):
     """Takes four vectors p, dp and q, dq, then tests whether they cross in
@@ -136,12 +137,12 @@ def do_vectors_intersect(px, py, dpx, dpy,
             return (1, t, u)
     return (0, -1., -1.)
         
-
+@cuda.jit
 def cross_product(px, py, qx, qy):
     '''Simple cython cross product for 2D vectors.'''
     return px * qy - py * qx
 
-
+@cuda.jit
 def sign(a):
     return (1. if a > 0. else (-1. if a < 0. else 0.))
 

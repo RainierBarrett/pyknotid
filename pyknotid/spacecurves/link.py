@@ -29,39 +29,6 @@ from pyknotid.visualise import plot_projection
 from pyknotid.utils import (vprint, get_rotation_matrix,
                            ensure_shape_tuple)
 
-# OLD BODY WE ARE REPLACING
-# for i in first_line_range:
-#     if i % 1000 == 0:
-#         self._vprint(
-#             '\ri = {} / {}'.format(
-#                 i, len(first_line_range)), False)
-#     v0 = points[i]
-#     dv = points[(i + 1) % len(points)] - v0
-
-#     vnum = i
-#     compnum = 0  # start at beginning of other line
-
-#     new_crossings = helpers_module.find_crossings(
-#         v0, dv, comparison_points, other_seg_lengths,
-#         vnum, compnum,
-#         max_segment_length,
-#         jump_mode)
-
-#     if not len(new_crossings):
-#         continue
-#     first_crossings = n.array(new_crossings[::2])
-#     first_crossings[:, 0] += cumulative_lengths[line_index]
-#     first_crossings[:, 1] += cumulative_lengths[other_index]
-#     sec_crossings = n.array(new_crossings[1::2])
-#     sec_crossings[:, 0] += cumulative_lengths[other_index]
-#     sec_crossings[:, 1] += cumulative_lengths[line_index]
-
-#     crossings[line_index].extend(first_crossings.tolist())
-#     crossings[other_index].extend(sec_crossings.tolist())
-
-
-
-
 @cuda.jit
 def crossings_loop_kernel(points, other_points, crossings):
     '''
@@ -69,24 +36,23 @@ def crossings_loop_kernel(points, other_points, crossings):
     and N_points_per_line blocks [TODO: in an N_lines grid?] to do 
     crossing finding in parallel and fill an array with results.'''
     tidx = cuda.threadIdx.x # thread index -> index on other line (up to N-1)
-    bidx = cuda.blockIdx.x # block index -> index on first line 
-    bw = cuda.blockDim.x # block width -> how long are the lines?
+    bidx = cuda.blockIdx.x # block index -> index on first line
+    bw = cuda.blockDim.x # block width -> how long are the lines
     v = points[bidx]
-    dv = points[(bidx+1) % bw] - v
+    dv = points[(bidx+1) % bw]
     u = other_points[tidx]
 
     # now the guts of the find_crossings function
     vx = v[0]
     vy = v[1]
     vz = v[2]
-    dvx = dv[0]
-    dvy = dv[1]
-    dvz = dv[2]
+    dvx = dv[0] - vx
+    dvy = dv[1] - vy
+    dvz = dv[2] - vz
     ux = u[0]
     uy = u[1]
     uz = u[2]
 
-    distance = n.sqrt((vx - ux)**2 + (vy - uy)**2)
     next_point = other_points[tidx+1]
     jump_x = next_point[0] - ux
     jump_y = next_point[1] - uy
@@ -107,14 +73,14 @@ def crossings_loop_kernel(points, other_points, crossings):
                             )
     flat_idx = tidx + bidx * bw
     if flat_idx < crossings.size:
-        crossings[flat_idx] = ((bidx + intersect_i,
-                                tidx + intersect_j,
-                                crossing_sign,
-                                crossing_sign * crossing_direction),
-                               (tidx + intersect_j,
-                                bidx + intersect_i,
-                                -1 * crossing_sign,
-                                crossing_sign * crossing_direction))
+        crossings[flat_idx][0] = bidx + intersect_i
+        crossings[flat_idx][1] = tidx + intersect_j
+        crossings[flat_idx][2] = crossing_sign
+        crossings[flat_idx][3] = crossing_sign * crossing_direction
+        crossings[flat_idx][4] = tidx + intersect_j
+        crossings[flat_idx][5] = bidx + intersect_i
+        crossings[flat_idx][6] = -1 * crossing_sign
+        crossings[flat_idx][7] = crossing_sign * crossing_direction
 
 
 class Link(object):
@@ -283,6 +249,7 @@ class Link(object):
             max_segment_length = n.max(n.hstack([
                 lengths[:-1] for lengths in segment_lengths]))
 
+        #TODO: replace this with one large kernel to handle all lines at once
         for line_index, line in enumerate(lines):
             for other_index, other_line in enumerate(lines[line_index+1:]):
                 self._vprint(
@@ -301,17 +268,14 @@ class Link(object):
                 if not include_closures:
                     first_line_range = first_line_range[:-1]
 
-                these_crossings = n.full([len(lines) * len(lines), 4], n.nan)
+                these_crossings = n.full([len(lines) * len(lines), 8], n.nan)
                 crossings_loop_kernel[len(points), 
                                       len(comparison_points)](points,
                                                                 comparison_points,
                                                                 these_crossings)
                 crossings.append(these_crossings)    
 
-
-
-                
-
+        # TODO: now that kernel works, update end logic to treat output correctly
         self._vprint('\n{} crossings found\n'.format(
             [len(cs) / 2 for cs in crossings]))
         [cs.sort(key=lambda s: s[0]) for cs in crossings]

@@ -4,6 +4,8 @@ channels:
 dependencies:
   - python = 3.11
   - cython
+  - cudatoolkit
+  - nvidia::cuda-python
   - numba
   - peewee
   - sympy

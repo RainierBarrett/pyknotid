@@ -71,16 +71,16 @@ def crossings_loop_kernel(points, other_points, crossings):
                              helpers.cross_product(
                                  dvx, dvy, jump_x, jump_y)
                             )
-    flat_idx = tidx + bidx * bw
-    if flat_idx < crossings.size:
-        crossings[flat_idx][0] = bidx + intersect_i
-        crossings[flat_idx][1] = tidx + intersect_j
-        crossings[flat_idx][2] = crossing_sign
-        crossings[flat_idx][3] = crossing_sign * crossing_direction
-        crossings[flat_idx][4] = tidx + intersect_j
-        crossings[flat_idx][5] = bidx + intersect_i
-        crossings[flat_idx][6] = -1 * crossing_sign
-        crossings[flat_idx][7] = crossing_sign * crossing_direction
+        flat_idx = tidx + bidx * bw
+        if flat_idx < crossings.size:
+            crossings[flat_idx][0] = bidx + intersect_i
+            crossings[flat_idx][1] = tidx + intersect_j
+            crossings[flat_idx][2] = crossing_sign
+            crossings[flat_idx][3] = crossing_sign * crossing_direction
+            crossings[flat_idx][4] = tidx + intersect_j
+            crossings[flat_idx][5] = bidx + intersect_i
+            crossings[flat_idx][6] = -1 * crossing_sign
+            crossings[flat_idx][7] = crossing_sign * crossing_direction
 
 
 class Link(object):
@@ -100,7 +100,7 @@ class Link(object):
         to True.
     '''
 
-    def __init__(self, lines, verbose=True):
+    def __init__(self, lines, verbose=False):
         self._lines = []
         self.verbose = verbose
 
@@ -268,18 +268,30 @@ class Link(object):
                 if not include_closures:
                     first_line_range = first_line_range[:-1]
 
-                these_crossings = n.full([len(lines) * len(lines), 8], n.nan)
+                these_crossings = n.full([len(points) * len(comparison_points), 8], n.nan)
                 crossings_loop_kernel[len(points), 
                                       len(comparison_points)](points,
                                                                 comparison_points,
                                                                 these_crossings)
-                crossings.append(these_crossings)    
+                # TODO: need to extend in a smarter way
+                # TODO: also, this is way way overcounting
+                real_crossings = these_crossings[n.where(~n.isnan(these_crossings).any(axis=1))]
+                first_crossings = real_crossings[:,0:4]
+                second_crossings = real_crossings[:,4:]
+                first_crossings[:, 0] += cumulative_lengths[line_index]
+                first_crossings[:, 1] += cumulative_lengths[other_index]
+                second_crossings[:, 0] += cumulative_lengths[other_index]
+                second_crossings[:, 1] += cumulative_lengths[line_index]
+                crossings[line_index].extend(first_crossings.tolist())
+                crossings[other_index].extend(second_crossings.tolist())
+                
 
         # TODO: now that kernel works, update end logic to treat output correctly
-        self._vprint('\n{} crossings found\n'.format(
-            [len(cs) / 2 for cs in crossings]))
-        [cs.sort(key=lambda s: s[0]) for cs in crossings]
-        crossings = [n.array(cs) for cs in crossings]
+        # TODO: also, check what's up  with the shape coming out here
+        #crossings = n.vstack(crossings)
+        self._vprint('\n{} crossings found ({})\n'.format(
+            [len(cs) / 2 for cs in crossings], len(crossings)))
+        #crossings = crossings[crossings[:,0].argsort()]
         self._crossings = (only_with_other_lines, crossings)
 
         return crossings
@@ -496,7 +508,7 @@ class Link(object):
         number = 0
         for line in crossings:
             if len(line):
-                number += n.sum(line[:, 3])
+                number += n.sum(line[3])
         return int(n.abs(number / 2))
 
     def smooth(self, *args, **kwargs):

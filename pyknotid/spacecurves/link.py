@@ -100,7 +100,7 @@ class Link(object):
         to True.
     '''
 
-    def __init__(self, lines, verbose=False):
+    def __init__(self, lines, verbose=True):
         self._lines = []
         self.verbose = verbose
 

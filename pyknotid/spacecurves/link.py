@@ -25,6 +25,7 @@ except:
     from pyknotid.spacecurves import helpers as chelpers
 from pyknotid.spacecurves import helpers
 from pyknotid.spacecurves.knot import Knot
+from pyknotid.spacecurves.openknot import OpenKnot
 from pyknotid.visualise import plot_projection
 from pyknotid.utils import (vprint, get_rotation_matrix,
                            ensure_shape_tuple)
@@ -145,6 +146,30 @@ class Link(object):
         '''
         shape = ensure_shape_tuple(shape)
         lines = [Knot.from_periodic_line(line, shape, perturb=False)
+                 for line in lines]
+        link = cls(lines)
+        if perturb:
+            link.translate(n.array([0.00123, 0.00231, 0.00321]))
+            link.rotate()
+        return link
+
+    @classmethod
+    def from_periodic_open_lines(cls, lines, shape, perturb=True):
+        '''Returns a :class:`Link` instance in which the OPEN lines have
+        been unwrapped through the periodic boundaries.
+
+        Parameters
+        ----------
+        line : list
+            A list of the Nx3 vectors of points in the lines
+        shape : array-like
+            The x, y, z distances of the periodic boundary
+        perturb : bool
+            If True, translates and rotates the knot to avoid any lattice
+            problems.
+        '''
+        shape = ensure_shape_tuple(shape)
+        lines = [OpenKnot.from_periodic_line(line, shape, perturb=False)
                  for line in lines]
         link = cls(lines)
         if perturb:

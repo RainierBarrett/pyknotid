@@ -83,6 +83,60 @@ def crossings_loop_kernel(points, other_points, crossings):
             crossings[flat_idx][6] = -1 * crossing_sign
             crossings[flat_idx][7] = crossing_sign * crossing_direction
 
+@cuda.jit
+def crossings_kernel(lines, crossings):
+    tidx = cuda.threadIdx.x # intex of point on first line
+    tidy = cuda.threadIdx.y # index of point on second line
+    bidx = cuda.blockIdx.x # index of first line 
+    bidy = cuda.blockIdx.y # index of second line 
+    block_width = cuda.blockDim.x
+    # no closures for now
+    # kernel dims: (Nlines, Nlines) grid of (line_size, line_size) blocks
+    # block X idx is first line, block Y idx is comparison line (need to avoid double-counting)
+    # grid X idx is point on first line, grid Y idx is point on comparison line
+    v = lines[bidx][tidx]
+    dv = lines[bidx][(tidx+1) % block_width]
+    u = lines[bidy][tidy]
+    next_point = lines[bidy][(tidy+1) % block_width]
+
+    vx = v[0]
+    vy = v[1]
+    vz = v[2]
+    dvx = dv[0]
+    dvy = dv[1]
+    dvz = dv[2]
+    ux = u[0]
+    uy = u[1]
+    uz = u[2]
+
+    jump_x = next_point[0] - ux
+    jump_y = next_point[1] - uy
+    jump_z = next_point[2] - uz
+
+    intersect, intersect_i, intersect_j = helpers.do_vectors_intersect(
+        vx, vy, dvx, dvy, ux, uy, jump_x, jump_y
+    )
+
+    if intersect:
+        duz = jump_z
+
+        crossing_sign = helpers.sign((vz + intersect_i * dvz) -
+                                     (uz + intersect_j * duz))
+        crossing_direction = helpers.sign(
+                             helpers.cross_product(
+                                 dvx, dvy, jump_x, jump_y)
+                            )
+        if bidy >= bidx:
+            crossings[bidx][bidx * block_width + bidy][0] = tidx + intersect_i
+            crossings[bidx][bidx * block_width + bidy][1] = tidy + intersect_j
+            crossings[bidx][bidx * block_width + bidy][2] = crossing_sign
+            crossings[bidx][bidx * block_width + bidy][3] = crossing_sign * crossing_direction
+            crossings[bidy][bidx * block_width + bidy][0] = tidy + intersect_j
+            crossings[bidy][bidx * block_width + bidy][1] = tidx + intersect_i
+            crossings[bidy][bidx * block_width + bidy][2] = -1. * crossing_sign
+            crossings[bidy][bidx * block_width + bidy][3] = crossing_sign * crossing_direction
+
+    return
 
 class Link(object):
     '''
@@ -239,85 +293,27 @@ class Link(object):
             helpers_module = helpers
 
         lines = self.lines
+        # first, convert lines contents to numpy array to send to GPU
+        # kernel dims: (Nlines, Nlines) grid of (line_size, line_size) blocks
+        # block X idx is first line, block Y idx is comparison line (need to avoid double-counting)
+        # grid X idx is point on first line, grid Y idx is point on comparison line
+        line_points = n.stack([line.points for line in lines])
+        nlines = len(lines)
+        points_per_line = line_points.shape[0]
 
-        # Get length of each line
-        line_lengths = [0.]
-        line_lengths.extend([line.arclength() for line in lines])
-        cumulative_lengths = n.cumsum(line_lengths)[:-1]
+        crossings = n.full([nlines, points_per_line**2, 4], n.nan)
 
-        if only_with_other_lines:
-            crossings = [[] for _ in lines]
-        else:
-            self._vprint('Calculating self-crossings for all {} '
-                         'component lines'.format(len(lines)))
-            crossings = [k.raw_crossings(
-                mode=mode, include_closure=include_closures,
-                recalculate=recalculate, try_cython=try_cython) for k in lines]
-            for index, cum_length in enumerate(cumulative_lengths):
-                if len(crossings[index]):
-                    crossings[index][:, :2] += cum_length
-                crossings[index] = crossings[index].tolist()
+        crossings_kernel[(nlines, nlines), (points_per_line, points_per_line)](line_points, crossings)
 
-        jump_mode = {'count_every_jump': 1, 'use_max_jump': 2,
-                     'naive': 3}[mode]
-
-        segment_lengths = [
-            n.roll(line.points[:, :2], -1, axis=0) - line.points[:, :2] for
-            line in lines]
-        segment_lengths = [
-            n.sqrt(n.sum(lengths * lengths, axis=1)) for
-            lengths in segment_lengths]
-
-        if include_closures:
-            max_segment_length = n.max(n.hstack(segment_lengths))
-        else:
-            max_segment_length = n.max(n.hstack([
-                lengths[:-1] for lengths in segment_lengths]))
-
-        #TODO: replace this with one large kernel to handle all lines at once
-        for line_index, line in enumerate(lines):
-            for other_index, other_line in enumerate(lines[line_index+1:]):
-                self._vprint(
-                    '\rComparing line {} with {}'.format(line_index,
-                                                         other_index))
-                other_index += line_index + 1
-                points = line.points
-                comparison_points = other_line.points
-                if include_closures:
-                    comparison_points = n.vstack((comparison_points,
-                                                  comparison_points[:1]))
-                other_seg_lengths = segment_lengths[other_index]
-                # other_seg_lengths is already corrected to include
-                # closures if necessary
-                first_line_range = range(len(points))
-                if not include_closures:
-                    first_line_range = first_line_range[:-1]
-
-                these_crossings = n.full([len(points) * len(comparison_points), 8], n.nan)
-                crossings_loop_kernel[len(points), 
-                                      len(comparison_points)](points,
-                                                                comparison_points,
-                                                                these_crossings)
-                # TODO: need to extend in a smarter way
-                # TODO: also, this is way way overcounting
-                real_crossings = these_crossings[n.where(~n.isnan(these_crossings).any(axis=1))]
-                first_crossings = real_crossings[:,0:4]
-                second_crossings = real_crossings[:,4:]
-                first_crossings[:, 0] += cumulative_lengths[line_index]
-                first_crossings[:, 1] += cumulative_lengths[other_index]
-                second_crossings[:, 0] += cumulative_lengths[other_index]
-                second_crossings[:, 1] += cumulative_lengths[line_index]
-                crossings[line_index].extend(first_crossings.tolist())
-                crossings[other_index].extend(second_crossings.tolist())
-                
+        real_crossings = crossings[n.where(~n.isnan(crossings).any(axis=2))]
 
         # TODO: now that kernel works, update end logic to treat output correctly
         # TODO: also, check what's up  with the shape coming out here
         #crossings = n.vstack(crossings)
         self._vprint('\n{} crossings found ({})\n'.format(
-            [len(cs) / 2 for cs in crossings], len(crossings)))
+            [len(cs) / 2 for cs in real_crossings], len(real_crossings)))
         #crossings = crossings[crossings[:,0].argsort()]
-        self._crossings = (only_with_other_lines, crossings)
+        self._crossings = (only_with_other_lines, real_crossings)
 
         return crossings
 

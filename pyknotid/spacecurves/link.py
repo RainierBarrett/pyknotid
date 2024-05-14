@@ -299,11 +299,19 @@ class Link(object):
         # grid X idx is point on first line, grid Y idx is point on comparison line
         line_points = n.stack([line.points for line in lines])
         nlines = len(lines)
-        points_per_line = line_points.shape[0]
+        points_per_line = line_points.shape[1]
+
+        print(f'\n\nDEBUG: nlines: {nlines} and points_per_line: {points_per_line}')
 
         crossings = n.full([nlines, points_per_line**2, 4], n.nan)
-
-        crossings_kernel[(nlines, nlines), (points_per_line, points_per_line)](line_points, crossings)
+        # upper limit of threads in one block
+        maxThreadsPerBlock = cuda.MAX_THREADS_PER_BLOCK
+        # number of threads we will need
+        threadsNeeded = (points_per_line**2) * (nlines**2)
+        remainder = threadsNeeded % maxThreadsPerBlock
+        blocksNeeded = threadsNeeded // maxThreadsPerBlock + (1 if remainder else 0)
+        # TODO: change kernel thread indexing math to reflect this reshaping
+        crossings_kernel[blocksNeeded, maxThreadsPerBlock](line_points, crossings)
 
         real_crossings = crossings[n.where(~n.isnan(crossings).any(axis=2))]
 

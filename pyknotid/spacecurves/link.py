@@ -85,56 +85,56 @@ def crossings_loop_kernel(points, other_points, crossings):
 
 @cuda.jit
 def crossings_kernel(lines, crossings):
-    tidx = cuda.threadIdx.x # intex of point on first line
-    tidy = cuda.threadIdx.y # index of point on second line
-    bidx = cuda.blockIdx.x # index of first line 
-    bidy = cuda.blockIdx.y # index of second line 
-    block_width = cuda.blockDim.x
     # no closures for now
-    # kernel dims: (Nlines, Nlines) grid of (line_size, line_size) blocks
-    # block X idx is first line, block Y idx is comparison line (need to avoid double-counting)
-    # grid X idx is point on first line, grid Y idx is point on comparison line
-    v = lines[bidx][tidx]
-    dv = lines[bidx][(tidx+1) % block_width]
-    u = lines[bidy][tidy]
-    next_point = lines[bidy][(tidy+1) % block_width]
+    # need to get particle pair indices from thread's flattened index
+    flat_idx = cuda.grid(1)
+    if flat_idx < crossings.size:
+        point1idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+        point2idx = cuda.blockIdx.y * cuda.blockDim.y + cuda.threadIdx.y
+        line1idx = cuda.blockIdx.z // cuda.blockDim.z
+        line2idx = cuda.blockIdx.z % cuda.blockDim.z
 
-    vx = v[0]
-    vy = v[1]
-    vz = v[2]
-    dvx = dv[0]
-    dvy = dv[1]
-    dvz = dv[2]
-    ux = u[0]
-    uy = u[1]
-    uz = u[2]
+        v = lines[line1idx][point1idx]
+        dv = lines[line1idx][(point1idx+1) % lines.shape[1]]
+        u = lines[line2idx][point2idx]
+        next_point = lines[line2idx][(line2idx+1) % lines.shape[1]]
 
-    jump_x = next_point[0] - ux
-    jump_y = next_point[1] - uy
-    jump_z = next_point[2] - uz
+        vx = v[0]
+        vy = v[1]
+        vz = v[2]
+        dvx = dv[0]
+        dvy = dv[1]
+        dvz = dv[2]
+        ux = u[0]
+        uy = u[1]
+        uz = u[2]
 
-    intersect, intersect_i, intersect_j = helpers.do_vectors_intersect(
-        vx, vy, dvx, dvy, ux, uy, jump_x, jump_y
-    )
+        jump_x = next_point[0] - ux
+        jump_y = next_point[1] - uy
+        jump_z = next_point[2] - uz
 
-    if intersect:
-        duz = jump_z
+        intersect, intersect_i, intersect_j = helpers.do_vectors_intersect(
+            vx, vy, dvx, dvy, ux, uy, jump_x, jump_y
+        )
 
-        crossing_sign = helpers.sign((vz + intersect_i * dvz) -
-                                     (uz + intersect_j * duz))
-        crossing_direction = helpers.sign(
-                             helpers.cross_product(
-                                 dvx, dvy, jump_x, jump_y)
-                            )
-        if bidy >= bidx:
-            crossings[bidx][bidx * block_width + bidy][0] = tidx + intersect_i
-            crossings[bidx][bidx * block_width + bidy][1] = tidy + intersect_j
-            crossings[bidx][bidx * block_width + bidy][2] = crossing_sign
-            crossings[bidx][bidx * block_width + bidy][3] = crossing_sign * crossing_direction
-            crossings[bidy][bidx * block_width + bidy][0] = tidy + intersect_j
-            crossings[bidy][bidx * block_width + bidy][1] = tidx + intersect_i
-            crossings[bidy][bidx * block_width + bidy][2] = -1. * crossing_sign
-            crossings[bidy][bidx * block_width + bidy][3] = crossing_sign * crossing_direction
+        if intersect:
+            duz = jump_z
+
+            crossing_sign = helpers.sign((vz + intersect_i * dvz) -
+                                         (uz + intersect_j * duz))
+            crossing_direction = helpers.sign(
+                                 helpers.cross_product(
+                                     dvx, dvy, jump_x, jump_y)
+                                )
+            if line2idx >= line1idx:
+                crossings[line1idx][point1idx * lines.shape[1] + point2idx][0] = point1idx + intersect_i
+                crossings[line1idx][point1idx * lines.shape[1] + point2idx][1] = point2idx + intersect_j
+                crossings[line1idx][point1idx * lines.shape[1] + point2idx][2] = crossing_sign
+                crossings[line1idx][point1idx * lines.shape[1] + point2idx][3] = crossing_sign * crossing_direction
+                crossings[line2idx][point1idx * lines.shape[1] + point2idx][0] = point2idx + intersect_j
+                crossings[line2idx][point1idx * lines.shape[1] + point2idx][1] = point1idx + intersect_i
+                crossings[line2idx][point1idx * lines.shape[1] + point2idx][2] = -1. * crossing_sign
+                crossings[line2idx][point1idx * lines.shape[1] + point2idx][3] = crossing_sign * crossing_direction
 
     return
 
@@ -303,17 +303,17 @@ class Link(object):
 
         print(f'\n\nDEBUG: nlines: {nlines} and points_per_line: {points_per_line}')
 
-        crossings = n.full([nlines, points_per_line**2, 4], n.nan)
-        # upper limit of threads in one block
-        maxThreadsPerBlock = cuda.MAX_THREADS_PER_BLOCK
-        # number of threads we will need
-        threadsNeeded = (points_per_line**2) * (nlines**2)
-        remainder = threadsNeeded % maxThreadsPerBlock
-        blocksNeeded = threadsNeeded // maxThreadsPerBlock + (1 if remainder else 0)
+        crossings = n.full([nlines, points_per_line*points_per_line, 4], n.nan)
+        threadsPerBlock = (32, 32)
+        bpgx = int(n.ceil(points_per_line / threadsPerBlock[0]))
+        bpgy = int(n.ceil(points_per_line / threadsPerBlock[1]))
+        bpgz = nlines * nlines
+        blocksPerGrid = (bpgx, bpgy, bpgz)
         # TODO: change kernel thread indexing math to reflect this reshaping
-        crossings_kernel[blocksNeeded, maxThreadsPerBlock](line_points, crossings)
+        crossings_kernel[blocksPerGrid, threadsPerBlock](line_points, crossings)
 
         real_crossings = crossings[n.where(~n.isnan(crossings).any(axis=2))]
+        print(f"\n\nDEBUG:real_crossings: {real_crossings}, {real_crossings.shape}")
 
         # TODO: now that kernel works, update end logic to treat output correctly
         # TODO: also, check what's up  with the shape coming out here
@@ -323,7 +323,7 @@ class Link(object):
         #crossings = crossings[crossings[:,0].argsort()]
         self._crossings = (only_with_other_lines, real_crossings)
 
-        return crossings
+        return real_crossings
 
     def translate(self, vector, lines=None):
         '''Translate all points in some or all lines of self.
@@ -535,6 +535,7 @@ class Link(object):
         crossings = self.raw_crossings(only_with_other_lines=True,
                                        **kwargs)
         number = 0
+        print(f'\n\nDEBUG: crossings: {crossings}, {crossings.shape}')
         for line in crossings:
             if len(line):
                 number += n.sum(line[3])

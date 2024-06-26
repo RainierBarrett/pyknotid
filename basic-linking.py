@@ -9,7 +9,7 @@ np.random.seed(42)
 # which has 120-mers
 def get_data(fpath, mol_size=120):
     raw = np.genfromtxt(fpath, skip_header=2)
-    molecule_lines = raw.reshape([-1, 120, 3])
+    molecule_lines = raw.reshape([-1, mol_size, 3])
     return molecule_lines
 
 data_file = 'detanglement-start.XYZ'

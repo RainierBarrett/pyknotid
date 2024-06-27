@@ -29,9 +29,7 @@ print(data.shape)
 links = link.from_periodic_lines(data, shape=[53.7321]*3)
 links.smooth(periodic=False)
 a=links.linking_number(include_closures=True)
-alex=alexander(links.gauss_code().simplify())
 
 links.plot()
 
 print('LINKING NUMBER: ', a)
-print('ALEXANDER: ', alex)
